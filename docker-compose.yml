@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  webhook:
+    build: .
+    container_name: renove_sdr_webhook
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - proxy_network  # NOME DA REDE DO TRAEFIK (ajuste se necessário)
+    labels:
+      - "traefik.enable=true"
+      
+      # ROTAS HTTP -> HTTPS E CONFIGURAÇÃO DO DOMÍNIO
+      # Substitua "seusubdominio.dominio.com.br" pelo host que vamos usar
+      - "traefik.http.routers.renove_webhook.rule=Host(`webhook.srv1579012.hstgr.cloud`)"
+      - "traefik.http.routers.renove_webhook.entrypoints=websecure"
+      - "traefik.http.routers.renove_webhook.tls=true"
+      - "traefik.http.routers.renove_webhook.tls.certresolver=letsencrypt" # (Ou o nome do seu resolver no Traefik, ex: myresolver)
+      
+      # REDIRECIONA PARA A PORTA 3000 DO CONTAINER
+      - "traefik.http.services.renove_webhook.loadbalancer.server.port=3000"
+
+# Conecta à rede externa onde o Traefik está rodando
+networks:
+  proxy_network:
+    external: true
+    name: openclaw-thcz_default
