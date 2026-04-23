@@ -85,10 +85,10 @@ async function askOpenClaw(user_message, user_id) {
         console.log(`Disparando comando OpenClaw (via CLI no container openclaw-thcz) para o lead ${user_id}...`);
         
         // Montamos o comando para entrar no container principal do OpenClaw e mandar ele rodar o comando `agent`
-        // Usamos o 'agent' command do OpenClaw enviando a mensagem e pegando a resposta sem formatações.
-        // O container original criado pelo gerenciador aparentemente é openclaw-thcz ou similar
+        // Usamos a opção --session-id em vez de --session, de acordo com o CLI do OpenClaw atual.
+        // Adicionamos também --agent main para garantir a seleção do agente correto se necessário.
         
-        const cliCommand = `docker exec openclaw-thcz-openclaw-1 openclaw agent --message "${system_prompt}" --session "sdr_${user_id}" --json`;
+        const cliCommand = `docker exec openclaw-thcz-openclaw-1 openclaw agent --message "${system_prompt}" --session-id "sdr_${user_id}" --json`;
         
         const { stdout, stderr } = await execPromise(cliCommand);
 
