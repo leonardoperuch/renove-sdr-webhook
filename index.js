@@ -72,68 +72,42 @@ app.post('/webhook', async (req, res) => {
 });
 
 // =========================================================================
-// INTEGRAÇÃO COM OPENCLAW (Cérebro do Agente) - Via API WebSocket / Webhook Plugin
+// INTEGRAÇÃO COM OPENCLAW (Cérebro do Agente) - Via CLI / Docker Exec
 // =========================================================================
-async function askOpenClaw(user_message, user_id) {
-    // Usamos o IP do host (gateway) visto por dentro do container docker default bridge (172.17.0.1) ou o host real do Traefik.
-    // Como os containers estão na rede "openclaw-thcz_default", a forma mais segura de chegar no container do openclaw é pelo seu nome interno da rede docker do openclaw.
-    // Se o nome real for "openclaw", a url base é http://openclaw:18789.
-    // A API Webhook nativa do OpenClaw para receber mensagens de canais externos (como webhook genérico) é a /api/webhooks/trigger
-    // Nós podemos mandar a mensagem para o Gateway usando o Plugin de Webhook.
-    
-    // Outra forma garantida e recomendada é via "openclaw agent --message..." mas como estamos dentro de outro docker (node:18-alpine),
-    // o binário "openclaw" não existe lá dentro. 
-    
-    // Vamos usar a API HTTP do Webhook que aciona a automação interna (TaskFlow ou Agent).
-    // Rota da API padrão para injeção de mensagem via Gateway é a POST /api/v1/message (se habilitada) ou disparar um workflow.
-    
-    const openclawUrl = process.env.OPENCLAW_API_URL || "http://172.17.0.1:18789/api/v1/sessions/send";
-    const openclawToken = process.env.OPENCLAW_TOKEN;
+const { exec } = require('child_process');
+const util = require('util');
+const execPromise = util.promisify(exec);
 
-    const system_prompt = `[MENSAGEM DO INSTAGRAM/FACEBOOK - LEAD: ${user_id}]\n\nVocê é a Renove, assistente de inteligência artificial da Dra. Gabriela Peruch (Clínica Renove Odontologia e Estética).\nAja como uma SDR premium. Seja educada, acolhedora e direta ao ponto.\nSeu objetivo é qualificar o lead que chamou no Instagram/Facebook e agendar uma avaliação.\nTratamentos principais: Invisalign e Lentes de Contato Dental. Público: Classe A/B.\nResponda em parágrafos curtos, ideais para mensagens de celular.\nMensagem do paciente:\n\n${user_message}`;
+async function askOpenClaw(user_message, user_id) {
+    const system_prompt = `Você é a Renove, assistente de IA da Dra. Gabriela Peruch (Renove Odontologia). Aja como uma SDR premium focada em qualificar leads e agendar consultas. Responda o lead de forma direta e acolhedora em 1 parágrafo curto. Mensagem do paciente: "${user_message.replace(/"/g, "'")}"`;
 
     try {
-        console.log(`Solicitando resposta ao OpenClaw para o lead ${user_id}...`);
+        console.log(`Disparando comando OpenClaw (via CLI no container openclaw-thcz) para o lead ${user_id}...`);
         
-        // Chamada à API WebSocket/HTTP do OpenClaw (Injeção de sessão)
-        const response = await axios.post(openclawUrl, {
-            sessionKey: `agent:sdr_meta_${user_id}:main`,
-            message: system_prompt,
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${openclawToken}`
-            }
-        });
+        // Montamos o comando para entrar no container principal do OpenClaw e mandar ele rodar o comando `agent`
+        // Usamos o 'agent' command do OpenClaw enviando a mensagem e pegando a resposta sem formatações.
+        // O container original criado pelo gerenciador aparentemente é openclaw-thcz ou similar
+        
+        const cliCommand = `docker exec openclaw-thcz-openclaw-1 openclaw agent --message "${system_prompt}" --session "sdr_${user_id}" --json`;
+        
+        const { stdout, stderr } = await execPromise(cliCommand);
 
-        // O endpoint sessions/send retorna a reply do assistente na propriedade "reply"
-        if (response.data && response.data.reply) {
-            return response.data.reply;
-        } else if (response.data && response.data.text) {
-            return response.data.text;
-        } else {
-            console.error("OpenClaw retornou payload inesperado:", response.data);
-            return "Um momento, a Dra. Gabi já vai te responder."; // Fallback seguro
+        if (stderr) {
+            console.error('Aviso/Erro interno do openclaw:', stderr);
         }
-    } catch (error) {
-        console.error('Erro na chamada ao OpenClaw:', error.response ? error.response.data : error.message);
-        
-        // Tentativa de fallback usando o webhook genérico do OpenClaw caso o sessions/send falhe
+
         try {
-            console.log("Tentando fallback de Webhook no OpenClaw...");
-            const fallbackUrl = openclawUrl.replace('/api/v1/sessions/send', '/api/webhooks/trigger/sdr');
-            await axios.post(fallbackUrl, {
-                userId: user_id,
-                text: user_message
-            }, {
-                headers: { 'Authorization': `Bearer ${openclawToken}` }
-            });
-            // O webhook é assíncrono e não retorna texto direto, então retornamos null para não dar erro
-            return null;
+            // A flag --json faz o CLI retornar a saída estruturada
+            const result = JSON.parse(stdout);
+            return result.text || result.reply || result.message;
         } catch (e) {
-            console.error('Falha também no fallback:', e.message);
-            return "Tivemos um pequeno problema na nossa rede. Pode deixar seu WhatsApp para entrarmos em contato?";
+            console.log("Não foi possível processar o JSON, retornando stdout puro:", stdout);
+            return stdout.trim();
         }
+
+    } catch (error) {
+        console.error('Erro ao executar o docker exec:', error.message);
+        return "Tivemos um pequeno problema na rede. Pode deixar seu WhatsApp para entrarmos em contato?";
     }
 }
 

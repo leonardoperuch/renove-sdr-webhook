@@ -6,6 +6,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --production
 
+# Instala o cliente Docker no Alpine para conseguirmos fazer 'docker exec'
+RUN apk add --no-cache docker-cli
+
 # Copia o restante do código
 COPY . .
 

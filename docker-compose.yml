@@ -19,6 +19,10 @@ services:
       
       # REDIRECIONA PARA A PORTA 3000 DO CONTAINER
       - "traefik.http.services.renove_webhook.loadbalancer.server.port=3000"
+    
+    # Compartilha o Socket do Docker da VPS com o Container do Webhook
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 # Conecta à rede externa onde o Traefik está rodando
 networks:
