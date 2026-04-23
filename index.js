@@ -72,32 +72,33 @@ app.post('/webhook', async (req, res) => {
 });
 
 // =========================================================================
-// INTEGRAÇÃO COM OPENCLAW (Cérebro do Agente)
+// INTEGRAÇÃO COM OPENCLAW (Cérebro do Agente) - Via API WebSocket / Webhook Plugin
 // =========================================================================
 async function askOpenClaw(user_message, user_id) {
-    // Usamos a API REST embutida do OpenClaw para acionar o Agente
-    const openclawUrl = process.env.OPENCLAW_API_URL || "http://openclaw:18789/api/v1/agent/run";
+    // Usamos o IP do host (gateway) visto por dentro do container docker default bridge (172.17.0.1) ou o host real do Traefik.
+    // Como os containers estão na rede "openclaw-thcz_default", a forma mais segura de chegar no container do openclaw é pelo seu nome interno da rede docker do openclaw.
+    // Se o nome real for "openclaw", a url base é http://openclaw:18789.
+    // A API Webhook nativa do OpenClaw para receber mensagens de canais externos (como webhook genérico) é a /api/webhooks/trigger
+    // Nós podemos mandar a mensagem para o Gateway usando o Plugin de Webhook.
+    
+    // Outra forma garantida e recomendada é via "openclaw agent --message..." mas como estamos dentro de outro docker (node:18-alpine),
+    // o binário "openclaw" não existe lá dentro. 
+    
+    // Vamos usar a API HTTP do Webhook que aciona a automação interna (TaskFlow ou Agent).
+    // Rota da API padrão para injeção de mensagem via Gateway é a POST /api/v1/message (se habilitada) ou disparar um workflow.
+    
+    const openclawUrl = process.env.OPENCLAW_API_URL || "http://172.17.0.1:18789/api/v1/sessions/send";
     const openclawToken = process.env.OPENCLAW_TOKEN;
 
-    const system_prompt = `
-    Você é a Renove, assistente de inteligência artificial da Dra. Gabriela Peruch (Clínica Renove Odontologia e Estética).
-    Aja como uma SDR premium. Seja educada, acolhedora e direta ao ponto.
-    Seu objetivo é qualificar o lead que chamou no Instagram/Facebook e agendar uma avaliação.
-    Tratamentos principais: Invisalign e Lentes de Contato Dental.
-    Público: Classe A/B.
-    Nunca diga que você é uma IA genérica, posicione-se como assistente da Dra. Gabi.
-    Responda SEMPRE em parágrafos curtos, ideais para mensagens de celular (Instagram/WhatsApp).
-    `;
+    const system_prompt = `[MENSAGEM DO INSTAGRAM/FACEBOOK - LEAD: ${user_id}]\n\nVocê é a Renove, assistente de inteligência artificial da Dra. Gabriela Peruch (Clínica Renove Odontologia e Estética).\nAja como uma SDR premium. Seja educada, acolhedora e direta ao ponto.\nSeu objetivo é qualificar o lead que chamou no Instagram/Facebook e agendar uma avaliação.\nTratamentos principais: Invisalign e Lentes de Contato Dental. Público: Classe A/B.\nResponda em parágrafos curtos, ideais para mensagens de celular.\nMensagem do paciente:\n\n${user_message}`;
 
     try {
         console.log(`Solicitando resposta ao OpenClaw para o lead ${user_id}...`);
         
-        // Fazendo chamada REST para a API do Gateway Local do OpenClaw
+        // Chamada à API WebSocket/HTTP do OpenClaw (Injeção de sessão)
         const response = await axios.post(openclawUrl, {
-            message: user_message,
-            system: system_prompt,
-            // Passamos o ID do usuário como sessão para o OpenClaw "lembrar" o contexto daquela pessoa!
-            session: `sdr_meta_${user_id}` 
+            sessionKey: `agent:sdr_meta_${user_id}:main`,
+            message: system_prompt,
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -105,18 +106,34 @@ async function askOpenClaw(user_message, user_id) {
             }
         });
 
-        // Retorna o texto da IA (estrutura esperada da API V1)
-        if (response.data && response.data.text) {
-            return response.data.text;
-        } else if (response.data && response.data.reply) {
+        // O endpoint sessions/send retorna a reply do assistente na propriedade "reply"
+        if (response.data && response.data.reply) {
             return response.data.reply;
+        } else if (response.data && response.data.text) {
+            return response.data.text;
         } else {
             console.error("OpenClaw retornou payload inesperado:", response.data);
             return "Um momento, a Dra. Gabi já vai te responder."; // Fallback seguro
         }
     } catch (error) {
-        console.error('Erro na chamada ao OpenClaw:', error.message);
-        return "Tivemos um pequeno problema na nossa rede. Pode deixar seu WhatsApp para entrarmos em contato?";
+        console.error('Erro na chamada ao OpenClaw:', error.response ? error.response.data : error.message);
+        
+        // Tentativa de fallback usando o webhook genérico do OpenClaw caso o sessions/send falhe
+        try {
+            console.log("Tentando fallback de Webhook no OpenClaw...");
+            const fallbackUrl = openclawUrl.replace('/api/v1/sessions/send', '/api/webhooks/trigger/sdr');
+            await axios.post(fallbackUrl, {
+                userId: user_id,
+                text: user_message
+            }, {
+                headers: { 'Authorization': `Bearer ${openclawToken}` }
+            });
+            // O webhook é assíncrono e não retorna texto direto, então retornamos null para não dar erro
+            return null;
+        } catch (e) {
+            console.error('Falha também no fallback:', e.message);
+            return "Tivemos um pequeno problema na nossa rede. Pode deixar seu WhatsApp para entrarmos em contato?";
+        }
     }
 }
 
