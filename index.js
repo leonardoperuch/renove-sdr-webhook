@@ -100,7 +100,19 @@ async function askOpenClaw(user_message, user_id) {
         try {
             // A flag --json faz o CLI retornar a saída estruturada
             const result = JSON.parse(stdout);
-            return result.text || result.reply || result.message;
+            // Estrutura real do OpenClaw CLI: result.result.payloads[0].text ou result.result.meta.finalAssistantVisibleText
+            const reply = result?.result?.payloads?.[0]?.text
+                || result?.result?.meta?.finalAssistantVisibleText
+                || result?.payloads?.[0]?.text
+                || result?.finalAssistantVisibleText
+                || result?.text
+                || result?.reply
+                || result?.message;
+
+            if (!reply) {
+                console.error('JSON parseado mas nenhum campo de texto encontrado. Estrutura:', JSON.stringify(result).slice(0, 500));
+            }
+            return reply;
         } catch (e) {
             console.log("Não foi possível processar o JSON, retornando stdout puro:", stdout);
             return stdout.trim();
